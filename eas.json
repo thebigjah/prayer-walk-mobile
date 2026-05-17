@@ -10,11 +10,13 @@
     },
     "preview": {
       "distribution": "internal",
+      "credentialsSource": "local",
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
+      "credentialsSource": "local",
       "autoIncrement": true
     }
   },
