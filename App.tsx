@@ -1,6 +1,8 @@
 import { StatusBar } from "expo-status-bar";
 import * as Location from "expo-location";
 import * as Haptics from "expo-haptics";
+import * as FileSystem from "expo-file-system";
+import * as Sharing from "expo-sharing";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -282,6 +284,69 @@ export default function App() {
       await Share.share({ message });
     } catch (e) {
       Alert.alert("Couldn't share", String(e));
+    }
+  };
+
+  const exportWalkAsGpx = async (walk: Walk) => {
+    const startIso = new Date(walk.startedAt).toISOString();
+    const name = walk.title || `Prayer walk ${new Date(walk.startedAt).toLocaleDateString()}`;
+    const desc = (walk.note || "Prayer walk").replace(/[<&>]/g, "");
+    const trkpts = walk.points
+      .map((p, i) => {
+        const t = new Date(walk.startedAt + (i / Math.max(walk.points.length - 1, 1)) * walk.durationMs).toISOString();
+        return `        <trkpt lat="${p.latitude.toFixed(7)}" lon="${p.longitude.toFixed(7)}"><time>${t}</time></trkpt>`;
+      })
+      .join("\n");
+    const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Prayer Walk" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>${name}</name>
+    <desc>${desc}</desc>
+    <time>${startIso}</time>
+  </metadata>
+  <trk>
+    <name>${name}</name>
+    <trkseg>
+${trkpts}
+    </trkseg>
+  </trk>
+</gpx>
+`;
+    try {
+      const filename = `prayer-walk-${walk.id}.gpx`;
+      const documentDir = (FileSystem as unknown as { documentDirectory: string }).documentDirectory;
+      const fileUri = `${documentDir}${filename}`;
+      const writeAsString = (FileSystem as unknown as { writeAsStringAsync: (uri: string, contents: string) => Promise<void> }).writeAsStringAsync;
+      await writeAsString(fileUri, gpx);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, { mimeType: "application/gpx+xml", dialogTitle: "Share GPX (open in Strava, Garmin, etc.)" });
+      } else {
+        Alert.alert("Saved", `GPX file saved to: ${fileUri}`);
+      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    } catch (e) {
+      Alert.alert("Export failed", String(e));
+    }
+  };
+
+  const exportAllAsJson = async () => {
+    if (walks.length === 0) {
+      Alert.alert("Nothing to export", "Record a walk first.");
+      return;
+    }
+    try {
+      const json = JSON.stringify({ exportedAt: Date.now(), walks }, null, 2);
+      const documentDir = (FileSystem as unknown as { documentDirectory: string }).documentDirectory;
+      const fileUri = `${documentDir}prayer-walks-backup-${Date.now()}.json`;
+      const writeAsString = (FileSystem as unknown as { writeAsStringAsync: (uri: string, contents: string) => Promise<void> }).writeAsStringAsync;
+      await writeAsString(fileUri, json);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, { mimeType: "application/json", dialogTitle: "Backup all walks (JSON)" });
+      } else {
+        Alert.alert("Saved", `Backup saved to: ${fileUri}`);
+      }
+    } catch (e) {
+      Alert.alert("Export failed", String(e));
     }
   };
 
@@ -605,15 +670,26 @@ export default function App() {
               </Pressable>
             </View>
             {walks.length > 0 && (
-              <Pressable
-                onPress={shareTotals}
-                style={({ pressed }) => [
-                  styles.btnGhost,
-                  { marginBottom: 14, alignItems: "center", opacity: pressed ? 0.6 : 1 },
-                ]}
-              >
-                <Text style={styles.btnGhostText}>Share total coverage →</Text>
-              </Pressable>
+              <View style={{ flexDirection: "row", gap: 8, marginBottom: 14 }}>
+                <Pressable
+                  onPress={shareTotals}
+                  style={({ pressed }) => [
+                    styles.btnGhost,
+                    { flex: 1, alignItems: "center", opacity: pressed ? 0.6 : 1 },
+                  ]}
+                >
+                  <Text style={styles.btnGhostText}>Share totals</Text>
+                </Pressable>
+                <Pressable
+                  onPress={exportAllAsJson}
+                  style={({ pressed }) => [
+                    styles.btnGhost,
+                    { flex: 1, alignItems: "center", opacity: pressed ? 0.6 : 1 },
+                  ]}
+                >
+                  <Text style={styles.btnGhostText}>Backup (JSON)</Text>
+                </Pressable>
+              </View>
             )}
             {walks.length === 0 ? (
               <Text style={{ color: colors.textLight, fontSize: 14, lineHeight: 22 }}>
@@ -651,6 +727,12 @@ export default function App() {
                         style={styles.delBtn}
                       >
                         <Text style={{ color: colors.accent, fontSize: 12 }}>Share</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => exportWalkAsGpx(item)}
+                        style={styles.delBtn}
+                      >
+                        <Text style={{ color: colors.accent, fontSize: 12 }}>GPX</Text>
                       </Pressable>
                       <Pressable
                         onPress={() =>
