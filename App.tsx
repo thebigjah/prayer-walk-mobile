@@ -1,12 +1,14 @@
 import { StatusBar } from "expo-status-bar";
 import * as Location from "expo-location";
+import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   FlatList,
   Modal,
   Pressable,
+  ScrollView,
   Share,
   StyleSheet,
   Text,
@@ -170,7 +172,7 @@ export default function App() {
   };
 
   const runDemoWalk = async () => {
-    // Simulated 30s walk along Acworth-ish coordinates so the app can be tested
+    // Simulated 30s walk along nearby coordinates so the app can be tested
     // from the couch without actually walking outdoors.
     const base = pos ?? { latitude: 33.8362, longitude: -84.677 };
     const demoPoints: Coord[] = Array.from({ length: 60 }, (_, i) => ({
@@ -180,10 +182,19 @@ export default function App() {
     setRecording(true);
     setPath([demoPoints[0]]);
     setStartedAt(Date.now());
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    // Auto-zoom map to fit the demo path
+    if (mapRef.current) {
+      mapRef.current.fitToCoordinates(demoPoints, {
+        edgePadding: { top: 80, right: 60, bottom: 280, left: 60 },
+        animated: true,
+      });
+    }
     let i = 1;
     const interval = setInterval(() => {
       if (i >= demoPoints.length) {
         clearInterval(interval);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
         // Finalize as a real saved walk
         const ended = Date.now();
         const walk: Walk = {
@@ -274,15 +285,73 @@ export default function App() {
   const dist = pathDistance(path);
   void tick;
 
-  // Heat-style polylines for all walks on map
+  // Heat-style polylines: vary the stroke COLOR by recency so the effect actually shows
+  // (react-native-maps Polyline doesn't accept strokeOpacity — was a bug in v0.1)
   const now = Date.now();
-  function recencyOpacity(endedAt: number): number {
+  function recencyColor(endedAt: number): string {
     const days = (now - endedAt) / 86400000;
-    if (days < 7) return 0.95;
-    if (days < 30) return 0.65;
-    if (days < 90) return 0.4;
-    return 0.25;
+    if (days < 7) return "#e8b968";   // bright accent
+    if (days < 30) return "#c2a173";  // muted accent
+    if (days < 90) return "#8a704c";  // faded
+    return "#5b4a35";                  // very faded
   }
+
+  // Lifetime stats + streak
+  const lifetime = useMemo(() => {
+    if (walks.length === 0) return null;
+    const totalDist = walks.reduce((s, w) => s + w.distanceMeters, 0);
+    const totalDur = walks.reduce((s, w) => s + w.durationMs, 0);
+    const longest = walks.reduce((a, b) => (b.distanceMeters > a.distanceMeters ? b : a));
+    // Streak: consecutive days (counting back from today) that contain >=1 walk
+    const dayKeys = new Set(walks.map((w) => new Date(w.endedAt).toDateString()));
+    let streak = 0;
+    const d = new Date();
+    while (dayKeys.has(d.toDateString())) {
+      streak++;
+      d.setDate(d.getDate() - 1);
+    }
+    // Also count distinct days walked overall
+    const distinctDays = dayKeys.size;
+    return { totalDist, totalDur, longest, streak, distinctDays };
+  }, [walks]);
+
+  // Tap-to-view a past walk on the map
+  const focusWalkOnMap = (walk: Walk) => {
+    setHistoryOpen(false);
+    if (!walk.points.length) return;
+    const lats = walk.points.map((p) => p.latitude);
+    const lngs = walk.points.map((p) => p.longitude);
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs);
+    const maxLng = Math.max(...lngs);
+    const latPad = Math.max((maxLat - minLat) * 0.4, 0.001);
+    const lngPad = Math.max((maxLng - minLng) * 0.4, 0.001);
+    mapRef.current?.animateToRegion(
+      {
+        latitude: (minLat + maxLat) / 2,
+        longitude: (minLng + maxLng) / 2,
+        latitudeDelta: (maxLat - minLat) + 2 * latPad,
+        longitudeDelta: (maxLng - minLng) + 2 * lngPad,
+      },
+      650,
+    );
+    Haptics.selectionAsync().catch(() => {});
+  };
+
+  // Wrap key actions with haptics
+  const startWalkHaptic = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    startWalk();
+  };
+  const stopWalkHaptic = () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    stopWalk();
+  };
+  const persistAndCloseHaptic = async () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    await persistAndClose();
+  };
 
   return (
     <View style={styles.root}>
@@ -304,19 +373,18 @@ export default function App() {
             longitudeDelta: 0.04,
           }}
         >
-          {/* Past walks (heatmap-style by recency) */}
+          {/* Past walks: recency-tinted (older = darker, newer = brighter) */}
           {walks
             .filter((w) => w.points.length > 1)
             .map((w) => (
               <Polyline
                 key={w.id}
                 coordinates={w.points}
-                strokeColor={colors.accent}
+                strokeColor={recencyColor(w.endedAt)}
                 strokeWidth={5}
                 lineCap="round"
                 lineJoin="round"
                 tappable={false}
-                {...({ strokeOpacity: recencyOpacity(w.endedAt) } as object)}
               />
             ))}
           {/* Current recording path */}
@@ -375,7 +443,7 @@ export default function App() {
               Tap Start before you begin walking. Prayer Walk only records when you tell it to.
             </Text>
             <Pressable
-              onPress={startWalk}
+              onPress={startWalkHaptic}
               style={({ pressed }) => [
                 styles.btn,
                 { backgroundColor: colors.accent, transform: [{ scale: pressed ? 0.98 : 1 }] },
@@ -385,6 +453,28 @@ export default function App() {
                 {pos ? "Start walking" : "Waiting for GPS…"}
               </Text>
             </Pressable>
+
+            {lifetime && (
+              <View style={styles.lifetime}>
+                <Text style={styles.lifetimeLabel}>LIFETIME</Text>
+                <View style={styles.lifetimeRow}>
+                  <View style={styles.lifetimeStat}>
+                    <Text style={styles.lifetimeVal}>{formatMeters(lifetime.totalDist)}</Text>
+                    <Text style={styles.lifetimeSub}>covered</Text>
+                  </View>
+                  <View style={styles.lifetimeStat}>
+                    <Text style={styles.lifetimeVal}>{walks.length}</Text>
+                    <Text style={styles.lifetimeSub}>{walks.length === 1 ? "walk" : "walks"}</Text>
+                  </View>
+                  <View style={styles.lifetimeStat}>
+                    <Text style={[styles.lifetimeVal, lifetime.streak > 0 && { color: colors.accentBright }]}>
+                      {lifetime.streak}
+                    </Text>
+                    <Text style={styles.lifetimeSub}>{lifetime.streak === 1 ? "day" : "days"} now</Text>
+                  </View>
+                </View>
+              </View>
+            )}
 
             <View style={{ flexDirection: "row", gap: 14, marginTop: 14, justifyContent: "space-between" }}>
               <Pressable onPress={() => setHistoryOpen(true)} style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}>
@@ -399,7 +489,7 @@ export default function App() {
           </>
         ) : (
           <Pressable
-            onPress={stopWalk}
+            onPress={stopWalkHaptic}
             style={({ pressed }) => [
               styles.btn,
               { backgroundColor: colors.red, transform: [{ scale: pressed ? 0.98 : 1 }] },
@@ -433,7 +523,7 @@ export default function App() {
               <Pressable onPress={cancelSave} style={({ pressed }) => [styles.btnGhost, { transform: [{ scale: pressed ? 0.98 : 1 }] }]}>
                 <Text style={styles.btnGhostText}>Discard</Text>
               </Pressable>
-              <Pressable onPress={persistAndClose} style={({ pressed }) => [styles.btn, { flex: 1, backgroundColor: colors.accent, transform: [{ scale: pressed ? 0.98 : 1 }] }]}>
+              <Pressable onPress={persistAndCloseHaptic} style={({ pressed }) => [styles.btn, { flex: 1, backgroundColor: colors.accent, transform: [{ scale: pressed ? 0.98 : 1 }] }]}>
                 <Text style={[styles.btnText, { color: colors.bg }]}>Save walk</Text>
               </Pressable>
             </View>
@@ -489,6 +579,12 @@ export default function App() {
                       ) : null}
                     </View>
                     <View style={{ gap: 6 }}>
+                      <Pressable
+                        onPress={() => focusWalkOnMap(item)}
+                        style={styles.delBtn}
+                      >
+                        <Text style={{ color: colors.accentBright, fontSize: 12 }}>View</Text>
+                      </Pressable>
                       <Pressable
                         onPress={() => shareWalk(item)}
                         style={styles.delBtn}
@@ -589,5 +685,15 @@ const styles = StyleSheet.create({
   walkPrimary: { color: colors.text, fontWeight: "700", fontSize: 15, marginBottom: 4 },
   walkSecondary: { color: colors.textMuted, fontSize: 13 },
   walkNote: { color: colors.text, fontSize: 13, fontStyle: "italic", marginTop: 6 },
-  delBtn: { borderColor: colors.borderLight, borderWidth: 1, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 },
+  delBtn: { borderColor: colors.borderLight, borderWidth: 1, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, alignItems: "center", minWidth: 50 },
+  lifetime: {
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopColor: colors.border, borderTopWidth: 1,
+  },
+  lifetimeLabel: { fontSize: 10, color: colors.textLight, letterSpacing: 1.4, fontWeight: "700", marginBottom: 8 },
+  lifetimeRow: { flexDirection: "row", gap: 14 },
+  lifetimeStat: { flex: 1 },
+  lifetimeVal: { fontSize: 18, fontWeight: "700", color: colors.text },
+  lifetimeSub: { fontSize: 11, color: colors.textLight, letterSpacing: 0.4 },
 });
