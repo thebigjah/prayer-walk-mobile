@@ -7,7 +7,7 @@ import {
   FlatList,
   Modal,
   Pressable,
-  ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -210,6 +210,31 @@ export default function App() {
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   };
 
+  const shareWalk = async (walk: Walk) => {
+    const noteLine = walk.note ? `\n\n"${walk.note}"` : "";
+    const message = `I prayer-walked ${formatMeters(walk.distanceMeters)} through my neighborhood today.${noteLine}\n\nA city should know it's being prayed for, and the people praying should know they're not doing it alone.\n\nVia Prayer Walk — https://coverage-bice.vercel.app/`;
+    try {
+      await Share.share({ message });
+    } catch (e) {
+      Alert.alert("Couldn't share", String(e));
+    }
+  };
+
+  const shareTotals = async () => {
+    if (walks.length === 0) {
+      Alert.alert("No walks yet", "Record a walk first, then share.");
+      return;
+    }
+    const totalDist = walks.reduce((s, w) => s + w.distanceMeters, 0);
+    const totalDur = walks.reduce((s, w) => s + w.durationMs, 0);
+    const message = `${walks.length} prayer walk${walks.length === 1 ? "" : "s"} so far. ${formatMeters(totalDist)} of streets carried in prayer. ${formatDuration(totalDur)} of intercession.\n\nVia Prayer Walk — https://coverage-bice.vercel.app/`;
+    try {
+      await Share.share({ message });
+    } catch (e) {
+      Alert.alert("Couldn't share", String(e));
+    }
+  };
+
   const elapsed = startedAt ? Date.now() - startedAt : 0;
   const dist = pathDistance(path);
   void tick;
@@ -372,6 +397,12 @@ export default function App() {
                 <Text style={[styles.btnText, { color: colors.bg }]}>Save walk</Text>
               </Pressable>
             </View>
+            <Pressable
+              onPress={() => saveModal && shareWalk(saveModal.walk)}
+              style={({ pressed }) => [styles.linkBtn, { marginTop: 14, opacity: pressed ? 0.6 : 1 }]}
+            >
+              <Text style={styles.linkText}>Share this walk →</Text>
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -386,6 +417,17 @@ export default function App() {
                 <Text style={{ color: colors.textMuted, fontSize: 16 }}>Close</Text>
               </Pressable>
             </View>
+            {walks.length > 0 && (
+              <Pressable
+                onPress={shareTotals}
+                style={({ pressed }) => [
+                  styles.btnGhost,
+                  { marginBottom: 14, alignItems: "center", opacity: pressed ? 0.6 : 1 },
+                ]}
+              >
+                <Text style={styles.btnGhostText}>Share total coverage →</Text>
+              </Pressable>
+            )}
             {walks.length === 0 ? (
               <Text style={{ color: colors.textLight, fontSize: 14, lineHeight: 22 }}>
                 No walks yet. Tap Start on the main screen to record your first.
@@ -406,17 +448,25 @@ export default function App() {
                         <Text style={styles.walkNote}>&ldquo;{item.note}&rdquo;</Text>
                       ) : null}
                     </View>
-                    <Pressable
-                      onPress={() =>
-                        Alert.alert("Delete walk?", "This cannot be undone.", [
-                          { text: "Cancel" },
-                          { text: "Delete", style: "destructive", onPress: () => deleteWalk(item.id) },
-                        ])
-                      }
-                      style={styles.delBtn}
-                    >
-                      <Text style={{ color: colors.textLight, fontSize: 12 }}>Delete</Text>
-                    </Pressable>
+                    <View style={{ gap: 6 }}>
+                      <Pressable
+                        onPress={() => shareWalk(item)}
+                        style={styles.delBtn}
+                      >
+                        <Text style={{ color: colors.accent, fontSize: 12 }}>Share</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() =>
+                          Alert.alert("Delete walk?", "This cannot be undone.", [
+                            { text: "Cancel" },
+                            { text: "Delete", style: "destructive", onPress: () => deleteWalk(item.id) },
+                          ])
+                        }
+                        style={styles.delBtn}
+                      >
+                        <Text style={{ color: colors.textLight, fontSize: 12 }}>Delete</Text>
+                      </Pressable>
+                    </View>
                   </View>
                 )}
               />
