@@ -3,6 +3,7 @@ import * as Location from "expo-location";
 import * as Haptics from "expo-haptics";
 import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
+import * as DocumentPicker from "expo-document-picker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -326,6 +327,34 @@ ${trkpts}
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     } catch (e) {
       Alert.alert("Export failed", String(e));
+    }
+  };
+
+  const importFromJson = async () => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: ["application/json", "*/*"],
+        copyToCacheDirectory: true,
+      });
+      if (res.canceled || !res.assets?.length) return;
+      const asset = res.assets[0];
+      const readAsString = (FileSystem as unknown as { readAsStringAsync: (uri: string) => Promise<string> }).readAsStringAsync;
+      const raw = await readAsString(asset.uri);
+      const parsed = JSON.parse(raw);
+      const incoming: Walk[] = Array.isArray(parsed) ? parsed : parsed.walks;
+      if (!Array.isArray(incoming)) throw new Error("File doesn't contain a walks array");
+      const existing = new Set(walks.map((w) => w.id));
+      const merged = [...walks, ...incoming.filter((w) => !existing.has(w.id))];
+      merged.sort((a, b) => b.endedAt - a.endedAt);
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+      setWalks(merged);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      Alert.alert(
+        "Imported",
+        `Added ${merged.length - walks.length} new walk${merged.length - walks.length === 1 ? "" : "s"} from ${incoming.length} in the file.`,
+      );
+    } catch (e) {
+      Alert.alert("Import failed", String(e));
     }
   };
 
@@ -669,28 +698,39 @@ ${trkpts}
                 <Text style={{ color: colors.textMuted, fontSize: 16 }}>Close</Text>
               </Pressable>
             </View>
-            {walks.length > 0 && (
-              <View style={{ flexDirection: "row", gap: 8, marginBottom: 14 }}>
+            <View style={{ flexDirection: "row", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+              {walks.length > 0 && (
                 <Pressable
                   onPress={shareTotals}
                   style={({ pressed }) => [
                     styles.btnGhost,
-                    { flex: 1, alignItems: "center", opacity: pressed ? 0.6 : 1 },
+                    { flex: 1, minWidth: 100, alignItems: "center", opacity: pressed ? 0.6 : 1 },
                   ]}
                 >
                   <Text style={styles.btnGhostText}>Share totals</Text>
                 </Pressable>
+              )}
+              {walks.length > 0 && (
                 <Pressable
                   onPress={exportAllAsJson}
                   style={({ pressed }) => [
                     styles.btnGhost,
-                    { flex: 1, alignItems: "center", opacity: pressed ? 0.6 : 1 },
+                    { flex: 1, minWidth: 100, alignItems: "center", opacity: pressed ? 0.6 : 1 },
                   ]}
                 >
-                  <Text style={styles.btnGhostText}>Backup (JSON)</Text>
+                  <Text style={styles.btnGhostText}>Backup</Text>
                 </Pressable>
-              </View>
-            )}
+              )}
+              <Pressable
+                onPress={importFromJson}
+                style={({ pressed }) => [
+                  styles.btnGhost,
+                  { flex: 1, minWidth: 100, alignItems: "center", opacity: pressed ? 0.6 : 1 },
+                ]}
+              >
+                <Text style={styles.btnGhostText}>Restore</Text>
+              </Pressable>
+            </View>
             {walks.length === 0 ? (
               <Text style={{ color: colors.textLight, fontSize: 14, lineHeight: 22 }}>
                 No walks yet. Tap Start on the main screen to record your first.
