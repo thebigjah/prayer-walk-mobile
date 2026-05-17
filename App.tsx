@@ -26,7 +26,18 @@ type Walk = {
   distanceMeters: number;
   points: Coord[];
   note: string;
+  title?: string;
 };
+
+const SCRIPTURE_ROTATION = [
+  { text: "Pray without ceasing.", ref: "1 Thessalonians 5:17" },
+  { text: "Seek the welfare of the city where I have sent you... pray to the LORD on its behalf.", ref: "Jeremiah 29:7" },
+  { text: "If my people, who are called by my name, will humble themselves and pray... I will hear from heaven and heal their land.", ref: "2 Chronicles 7:14" },
+  { text: "The earnest prayer of a righteous person has great power and produces wonderful results.", ref: "James 5:16" },
+  { text: "And when ye stand praying, forgive.", ref: "Mark 11:25" },
+  { text: "Watch ye and pray.", ref: "Mark 14:38" },
+  { text: "I have set the LORD always before me.", ref: "Psalm 16:8" },
+];
 
 const STORAGE_KEY = "prayer_walk.walks.v1";
 
@@ -88,6 +99,11 @@ export default function App() {
   const [walks, setWalks] = useState<Walk[]>([]);
   const [saveModal, setSaveModal] = useState<{ walk: Walk; note: string } | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const verse = useMemo(() => {
+    const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+    return SCRIPTURE_ROTATION[dayOfYear % SCRIPTURE_ROTATION.length];
+  }, []);
 
   const watchSub = useRef<Location.LocationSubscription | null>(null);
   const mapRef = useRef<MapView | null>(null);
@@ -226,14 +242,16 @@ export default function App() {
       distanceMeters: pathDistance(path),
       points: path,
       note: "",
+      title: "",
     };
     setRecording(false);
+    setTitle("");
     setSaveModal({ walk, note: "" });
   };
 
   const persistAndClose = async () => {
     if (!saveModal) return;
-    const walk = { ...saveModal.walk, note: saveModal.note.trim() };
+    const walk = { ...saveModal.walk, note: saveModal.note.trim(), title: title.trim() };
     const next = [walk, ...walks];
     setWalks(next);
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -241,6 +259,7 @@ export default function App() {
     setPath([]);
     setStartedAt(null);
     setTick(0);
+    setTitle("");
   };
 
   const cancelSave = () => {
@@ -432,6 +451,23 @@ export default function App() {
             <Text style={{ color: "#ffb8a4", fontSize: 13 }}>{permError}</Text>
           </View>
         )}
+
+        {/* Recenter map to current position */}
+        {pos && !recording && (
+          <Pressable
+            onPress={() => {
+              Haptics.selectionAsync().catch(() => {});
+              mapRef.current?.animateToRegion(
+                { latitude: pos.latitude, longitude: pos.longitude, latitudeDelta: 0.005, longitudeDelta: 0.005 },
+                500,
+              );
+            }}
+            style={({ pressed }) => [styles.recenterBtn, { transform: [{ scale: pressed ? 0.94 : 1 }] }]}
+            accessibilityLabel="Recenter map on current location"
+          >
+            <Text style={styles.recenterIcon}>◎</Text>
+          </Pressable>
+        )}
       </View>
 
       {/* CONTROL PANEL */}
@@ -442,6 +478,12 @@ export default function App() {
             <Text style={styles.panelSub}>
               Tap Start before you begin walking. Prayer Walk only records when you tell it to.
             </Text>
+            {walks.length === 0 && (
+              <View style={styles.verseBox}>
+                <Text style={styles.verseText}>&ldquo;{verse.text}&rdquo;</Text>
+                <Text style={styles.verseRef}>— {verse.ref}</Text>
+              </View>
+            )}
             <Pressable
               onPress={startWalkHaptic}
               style={({ pressed }) => [
@@ -473,6 +515,12 @@ export default function App() {
                     <Text style={styles.lifetimeSub}>{lifetime.streak === 1 ? "day" : "days"} now</Text>
                   </View>
                 </View>
+                {lifetime.longest && (
+                  <Text style={styles.lifetimePr}>
+                    PR: {formatMeters(lifetime.longest.distanceMeters)}
+                    {lifetime.longest.title ? ` — ${lifetime.longest.title}` : ""}
+                  </Text>
+                )}
               </View>
             )}
 
@@ -504,10 +552,19 @@ export default function App() {
       <Modal visible={!!saveModal} animationType="slide" transparent>
         <View style={styles.modalRoot}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalLabel}>WALK SAVED</Text>
+            <Text style={styles.modalLabel}>WALK SAVED{saveModal && lifetime && saveModal.walk.distanceMeters >= lifetime.longest.distanceMeters ? " · NEW PR" : ""}</Text>
             <Text style={styles.modalTitle}>
               {saveModal ? `${formatMeters(saveModal.walk.distanceMeters)} · ${formatDuration(saveModal.walk.durationMs)}` : ""}
             </Text>
+
+            <Text style={styles.inputLabel}>Title (optional)</Text>
+            <TextInput
+              value={title}
+              onChangeText={setTitle}
+              placeholder='e.g. "Sunday morning loop"'
+              placeholderTextColor={colors.textLight}
+              style={styles.input}
+            />
 
             <Text style={styles.inputLabel}>One-line prayer note (optional)</Text>
             <TextInput
@@ -570,8 +627,12 @@ export default function App() {
                 renderItem={({ item }) => (
                   <View style={styles.walkRow}>
                     <View style={{ flex: 1 }}>
+                      {item.title ? (
+                        <Text style={[styles.walkPrimary, { fontFamily: undefined }]}>{item.title}</Text>
+                      ) : null}
                       <Text style={styles.walkPrimary}>
                         {formatMeters(item.distanceMeters)} · {formatDuration(item.durationMs)}
+                        {lifetime && item.id === lifetime.longest.id ? "  · PR" : ""}
                       </Text>
                       <Text style={styles.walkSecondary}>{formatWhen(item.endedAt)}</Text>
                       {item.note ? (
@@ -696,4 +757,24 @@ const styles = StyleSheet.create({
   lifetimeStat: { flex: 1 },
   lifetimeVal: { fontSize: 18, fontWeight: "700", color: colors.text },
   lifetimeSub: { fontSize: 11, color: colors.textLight, letterSpacing: 0.4 },
+  lifetimePr: { fontSize: 12, color: colors.accent, marginTop: 8, fontWeight: "600" },
+  verseBox: {
+    marginTop: 16,
+    padding: 14,
+    borderLeftWidth: 3, borderLeftColor: colors.accent,
+    backgroundColor: "rgba(194,161,115,0.06)",
+    borderRadius: 6,
+  },
+  verseText: { fontSize: 14, color: colors.text, fontStyle: "italic", lineHeight: 20 },
+  verseRef: { fontSize: 12, color: colors.textLight, marginTop: 6 },
+  recenterBtn: {
+    position: "absolute", bottom: 16, right: 16,
+    width: 46, height: 46, borderRadius: 23,
+    backgroundColor: colors.bg2,
+    borderColor: colors.borderLight, borderWidth: 1,
+    alignItems: "center", justifyContent: "center",
+    shadowColor: "#000", shadowOpacity: 0.4, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+  },
+  recenterIcon: { color: colors.accent, fontSize: 22, fontWeight: "700" },
 });
