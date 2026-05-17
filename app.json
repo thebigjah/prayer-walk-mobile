@@ -42,6 +42,12 @@
           "locationAlwaysAndWhenInUsePermission": "Prayer Walk records your route only while you're actively recording a walk."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "b9ecae04-47a7-4d51-9077-dd6cd0cf4295"
+      }
+    },
+    "owner": "elijahbear"
   }
 }
