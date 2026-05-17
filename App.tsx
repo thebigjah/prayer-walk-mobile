@@ -169,6 +169,41 @@ export default function App() {
     }
   };
 
+  const runDemoWalk = async () => {
+    // Simulated 30s walk along Acworth-ish coordinates so the app can be tested
+    // from the couch without actually walking outdoors.
+    const base = pos ?? { latitude: 33.8362, longitude: -84.677 };
+    const demoPoints: Coord[] = Array.from({ length: 60 }, (_, i) => ({
+      latitude: base.latitude + Math.sin(i / 7) * 0.0008 + i * 0.00004,
+      longitude: base.longitude + Math.cos(i / 7) * 0.0008 + i * 0.00006,
+    }));
+    setRecording(true);
+    setPath([demoPoints[0]]);
+    setStartedAt(Date.now());
+    let i = 1;
+    const interval = setInterval(() => {
+      if (i >= demoPoints.length) {
+        clearInterval(interval);
+        // Finalize as a real saved walk
+        const ended = Date.now();
+        const walk: Walk = {
+          id: `demo_${ended.toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+          startedAt: ended - 30000,
+          endedAt: ended,
+          durationMs: 30000,
+          distanceMeters: pathDistance(demoPoints),
+          points: demoPoints,
+          note: "Demo walk",
+        };
+        setRecording(false);
+        setSaveModal({ walk, note: "Demo walk" });
+        return;
+      }
+      setPath((prev) => [...prev, demoPoints[i]]);
+      i++;
+    }, 500);
+  };
+
   const stopWalk = () => {
     if (!startedAt) return;
     const ended = Date.now();
@@ -351,11 +386,16 @@ export default function App() {
               </Text>
             </Pressable>
 
-            <Pressable onPress={() => setHistoryOpen(true)} style={styles.linkBtn}>
-              <Text style={styles.linkText}>
-                {walks.length} {walks.length === 1 ? "walk" : "walks"} saved →
-              </Text>
-            </Pressable>
+            <View style={{ flexDirection: "row", gap: 14, marginTop: 14, justifyContent: "space-between" }}>
+              <Pressable onPress={() => setHistoryOpen(true)} style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}>
+                <Text style={styles.linkText}>
+                  {walks.length} {walks.length === 1 ? "walk" : "walks"} saved →
+                </Text>
+              </Pressable>
+              <Pressable onPress={runDemoWalk} style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}>
+                <Text style={[styles.linkText, { color: colors.accent }]}>Try a demo walk →</Text>
+              </Pressable>
+            </View>
           </>
         ) : (
           <Pressable
